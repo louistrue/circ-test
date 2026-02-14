@@ -12,3 +12,11 @@ venv/
 *.ifc
 .idea/
 .vscode/
+ifc/
+EPD_Developer_Docs/
+data/
+00_condaEnvs/
+
+# API/database caches (regenerated on first run)
+.kbob_cache.json
+.oeko_bench_cache.json

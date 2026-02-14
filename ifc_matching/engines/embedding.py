@@ -10,6 +10,18 @@ import numpy as np
 from ifc_matching.engines.base import BaseMatcher, MatchResult
 
 
+# BGE-M3: state-of-the-art multilingual embedding model (BAAI).
+# 100+ languages, 8K context, ~568M params.  Best open-source model for
+# multilingual RAG / retrieve-rerank pipelines in the construction domain.
+DEFAULT_MODEL = "BAAI/bge-m3"
+
+# Lightweight multilingual alternative (~118M params, 50+ languages).
+MULTILINGUAL_MINI_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+
+# Legacy English-only model kept for benchmark comparison.
+LEGACY_MODEL = "all-MiniLM-L6-v2"
+
+
 class EmbeddingMatcher(BaseMatcher):
     """Stage-1 retriever that ranks candidates via cosine similarity.
 
@@ -18,6 +30,11 @@ class EmbeddingMatcher(BaseMatcher):
     * ``"sentence-transformers"`` – local models (BERT, fine-tuned HF models).
     * ``"openai"`` – OpenAI embedding API (``text-embedding-3-large`` etc.).
 
+    The default model is ``BAAI/bge-m3``, a state-of-the-art multilingual
+    embedding model supporting 100+ languages with 8K context window.
+    This eliminates the cross-lingual failures observed with the
+    English-only ``all-MiniLM-L6-v2``.
+
     The original ifcProductMatching logic (whole-term *and* token-level
     cosine similarity, keeping the higher score) is preserved and can be
     toggled with ``use_token_matching``.
@@ -25,7 +42,7 @@ class EmbeddingMatcher(BaseMatcher):
 
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
+        model_name: str = DEFAULT_MODEL,
         backend: Literal["sentence-transformers", "openai"] = "sentence-transformers",
         *,
         use_token_matching: bool = True,
@@ -126,13 +143,20 @@ class EmbeddingMatcher(BaseMatcher):
                     q_tok_embs = tok_embs[: len(query_tokens)]
                     c_tok_embs = tok_embs[len(query_tokens) :]
 
-                    max_tok = max(
-                        self._cosine(qt, ct)
-                        for qt in q_tok_embs
-                        for ct in c_tok_embs
-                    )
-                    if max_tok > best_score:
-                        best_score = max_tok
+                    # Improved scoring: average best-match per query token,
+                    # weighted by coverage. Prevents single-token collapse
+                    # (e.g., "Metall" matching everything with "Metall" at 1.0).
+                    q_best = []
+                    for qt in q_tok_embs:
+                        best_for_q = max(self._cosine(qt, ct) for ct in c_tok_embs)
+                        q_best.append(best_for_q)
+                    # Average of per-query-token best matches
+                    avg_tok = sum(q_best) / len(q_best)
+                    # Blend: 60% average coverage + 40% best single match
+                    max_tok = max(q_best)
+                    tok_score = 0.6 * avg_tok + 0.4 * max_tok
+                    if tok_score > best_score:
+                        best_score = tok_score
                         method = "token"
 
             results.append(
